@@ -1,0 +1,16 @@
+.#-----------------------------------------------------
+.input|confluence+xhtml/1.0
+.#-----------------------------------------------------
+<p>before <code>code content</code> after</p>
+.#-----------------------------------------------------
+.expect|event/1.0
+.#-----------------------------------------------------
+beginDocument
+beginParagraph
+onWord [before]
+onSpace
+onMacroInline [code] [language=none] [code content]
+onSpace
+onWord [after]
+endParagraph
+endDocument
