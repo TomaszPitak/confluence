@@ -23,18 +23,15 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.StringReader;
-import java.util.Collection;
-import java.util.Date;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
+import java.util.*;
 import java.util.regex.Pattern;
 
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Provider;
 
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.Multimap;
 import org.apache.commons.configuration2.ex.ConfigurationException;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.exception.ExceptionUtils;
@@ -91,7 +88,7 @@ import org.xwiki.rendering.syntax.Syntax;
 public class ConfluenceInputFilterStream
     extends AbstractBeanInputFilterStream<ConfluenceInputProperties, ConfluenceFilter>
 {
-    private static final Pattern FORBIDDEN_USER_CHARACTERS = Pattern.compile("[. /]");
+    private static final Pattern FORBIDDEN_USER_CHARACTERS = Pattern.compile("[/]");
 
     private static final String CONFLUENCEPAGE_CLASSNAME = "Confluence.Code.ConfluencePageClass";
 
@@ -503,25 +500,43 @@ public class ConfluenceInputFilterStream
                     createPageIdentifier(pageId, spaceKey), ExceptionUtils.getRootCauseMessage(e));
             }
         }
-        if (pageProperties.containsKey(ConfluenceXMLPackage.KEY_PAGE_REVISION)) {
+        if (pageProperties.containsKey(ConfluenceXMLPackage.KEY_PAGE_REVISION_DATE)) {
+            try {
+                documentLocaleParameters.put(WikiDocumentFilter.PARAMETER_REVISION_DATE,
+                        this.confluencePackage.getDate(pageProperties, ConfluenceXMLPackage.KEY_PAGE_REVISION_DATE));
+            } catch (Exception e) {////////////
+                this.logger.warn("Failed to parse revision date of the document with id [{}]. Cause [{}].",
+                        createPageIdentifier(pageId, spaceKey), ExceptionUtils.getRootCauseMessage(e));
+            }
+        }
+       /* if (pageProperties.containsKey(ConfluenceXMLPackage.KEY_PAGE_REVISION)) {
             documentLocaleParameters.put(WikiDocumentFilter.PARAMETER_LASTREVISION,
                 pageProperties.getString(ConfluenceXMLPackage.KEY_PAGE_REVISION));
-        }
+        }*/
 
         // > WikiDocumentLocale
         proxyFilter.beginWikiDocumentLocale(locale, documentLocaleParameters);
 
         // Revisions
         if (pageProperties.containsKey(ConfluenceXMLPackage.KEY_PAGE_REVISIONS)) {
-            List<Long> revisions =
-                this.confluencePackage.getLongList(pageProperties, ConfluenceXMLPackage.KEY_PAGE_REVISIONS);
+            List<Long> revisions = this.confluencePackage.getLongList(pageProperties, ConfluenceXMLPackage.KEY_PAGE_REVISIONS);
+            Map<Integer, Long> revisionsInt = new LinkedHashMap<>();
             for (Long revisionId : revisions) {
-                readPageRevision(revisionId, spaceKey, filter, proxyFilter);
+                ConfluenceProperties pageProperties2 = getPageProperties(revisionId);
+                Integer revision2 = Integer.parseInt(pageProperties2.getString(ConfluenceXMLPackage.KEY_PAGE_REVISION));
+                revisionsInt.put(revision2, revisionId);
+            }
+
+            List<Integer> sortedKeys = new ArrayList<>(revisionsInt.keySet());
+            Collections.sort(sortedKeys);
+
+            for (Integer key : sortedKeys) {
+                readPageRevision(revisionsInt.get(key), spaceKey, filter, proxyFilter, false);
             }
         }
 
         // Current version
-        readPageRevision(pageId, spaceKey, filter, proxyFilter);
+        readPageRevision(pageId, spaceKey, filter, proxyFilter, true);
 
         // < WikiDocumentLocale
         proxyFilter.endWikiDocumentLocale(locale, documentLocaleParameters);
@@ -618,7 +633,7 @@ public class ConfluenceInputFilterStream
         }
     }
 
-    private void readPageRevision(Long pageId, String spaceKey, Object filter, ConfluenceFilter proxyFilter)
+    private void readPageRevision(Long pageId, String spaceKey, Object filter, ConfluenceFilter proxyFilter, boolean isCurrentVersion)
         throws FilterException
     {
         ConfluenceProperties pageProperties = getPageProperties(pageId);
@@ -628,13 +643,15 @@ public class ConfluenceInputFilterStream
             return;
         }
 
-        readPageRevision(pageId, spaceKey, pageProperties, filter, proxyFilter);
+        readPageRevision(pageId, spaceKey, pageProperties, filter, proxyFilter, isCurrentVersion);
     }
 
     private void readPageRevision(long pageId, String spaceKey, ConfluenceProperties pageProperties, Object filter,
-        ConfluenceFilter proxyFilter) throws FilterException
+        ConfluenceFilter proxyFilter, boolean isCurrentVersion) throws FilterException
     {
         String revision = pageProperties.getString(ConfluenceXMLPackage.KEY_PAGE_REVISION);
+        int revisionInt = Integer.parseInt(revision);
+        if (isCurrentVersion) revision = String.valueOf(revisionInt + 1);
 
         FilterEventParameters documentRevisionParameters = new FilterEventParameters();
         if (pageProperties.containsKey(ConfluenceXMLPackage.KEY_PAGE_PARENT)) {
@@ -734,7 +751,7 @@ public class ConfluenceInputFilterStream
         }
 
         // Attachments
-        Map<String, ConfluenceProperties> pageAttachments = new LinkedHashMap<>();
+        Multimap<String, ConfluenceProperties> pageAttachments = ArrayListMultimap.create();
         for (long attachmentId : this.confluencePackage.getAttachments(pageId)) {
             ConfluenceProperties attachmentProperties;
             try {
@@ -747,26 +764,7 @@ public class ConfluenceInputFilterStream
             }
 
             String attachmentName = this.confluencePackage.getAttachmentName(attachmentProperties);
-
-            ConfluenceProperties currentAttachmentProperties = pageAttachments.get(attachmentName);
-            if (currentAttachmentProperties != null) {
-                try {
-                    Date date = this.confluencePackage.getDate(attachmentProperties,
-                        ConfluenceXMLPackage.KEY_ATTACHMENT_REVISION_DATE);
-                    Date currentDate = this.confluencePackage.getDate(currentAttachmentProperties,
-                        ConfluenceXMLPackage.KEY_ATTACHMENT_REVISION_DATE);
-
-                    if (date.after(currentDate)) {
-                        pageAttachments.put(attachmentName, attachmentProperties);
-                    }
-                } catch (Exception e) {
-                    this.logger.warn(
-                        "Failed to parse the date of attachment [{}] from the page with id [{}], skipping it. Cause: [{}].",
-                        createPageIdentifier(pageId, spaceKey), attachmentId, ExceptionUtils.getRootCauseMessage(e));
-                }
-            } else {
-                pageAttachments.put(attachmentName, attachmentProperties);
-            }
+            pageAttachments.put(attachmentName, attachmentProperties);
         }
 
         for (ConfluenceProperties attachmentProperties : pageAttachments.values()) {
@@ -1016,9 +1014,10 @@ public class ConfluenceInputFilterStream
         if (mediaType != null) {
             attachmentParameters.put(WikiAttachmentFilter.PARAMETER_CONTENT_TYPE, mediaType);
         }
-        if (attachmentProperties.containsKey(ConfluenceXMLPackage.KEY_ATTACHMENT_CREATION_AUTHOR)) {
-            attachmentParameters.put(WikiAttachmentFilter.PARAMETER_CREATION_AUTHOR,
-                attachmentProperties.getString(ConfluenceXMLPackage.KEY_ATTACHMENT_CREATION_AUTHOR));
+        if (attachmentProperties.containsKey(ConfluenceXMLPackage.KEY_ATTACHMENT_CREATION_AUTHOR_KEY)) {
+            String authorKey = attachmentProperties.getString(ConfluenceXMLPackage.KEY_ATTACHMENT_CREATION_AUTHOR_KEY);
+            String authorName = toUserReference(resolveUserName(authorKey, authorKey));
+            attachmentParameters.put(WikiDocumentFilter.PARAMETER_CREATION_AUTHOR, authorName);
         }
         if (attachmentProperties.containsKey(ConfluenceXMLPackage.KEY_ATTACHMENT_CREATION_DATE)) {
             try {
@@ -1031,9 +1030,10 @@ public class ConfluenceInputFilterStream
         }
 
         attachmentParameters.put(WikiAttachmentFilter.PARAMETER_REVISION, String.valueOf(version));
-        if (attachmentProperties.containsKey(ConfluenceXMLPackage.KEY_ATTACHMENT_REVISION_AUTHOR)) {
-            attachmentParameters.put(WikiAttachmentFilter.PARAMETER_REVISION_AUTHOR,
-                attachmentProperties.getString(ConfluenceXMLPackage.KEY_ATTACHMENT_REVISION_AUTHOR));
+        if (attachmentProperties.containsKey(ConfluenceXMLPackage.KEY_ATTACHMENT_REVISION_AUTHOR_KEY)) {
+            String authorKey = attachmentProperties.getString(ConfluenceXMLPackage.KEY_ATTACHMENT_REVISION_AUTHOR_KEY);
+            String authorName = toUserReference(resolveUserName(authorKey, authorKey));
+            attachmentParameters.put(WikiDocumentFilter.PARAMETER_REVISION_AUTHOR, authorName);
         }
         if (attachmentProperties.containsKey(ConfluenceXMLPackage.KEY_ATTACHMENT_REVISION_DATE)) {
             try {
@@ -1053,8 +1053,14 @@ public class ConfluenceInputFilterStream
         // WikiAttachment
 
         try (FileInputStream fis = new FileInputStream(contentFile)) {
-            proxyFilter.onWikiAttachment(attachmentName, fis,
-                attachmentSize != -1 ? attachmentSize : contentFile.length(), attachmentParameters);
+            int i = attachmentName.lastIndexOf('.');
+            if (i != -1) {
+                String name = attachmentName.substring(0, i);
+                String type = attachmentName.substring(i);
+                proxyFilter.onWikiAttachment(name + "_v" + version + type, fis, attachmentSize != -1 ? attachmentSize : contentFile.length(), attachmentParameters);
+            } else {
+                proxyFilter.onWikiAttachment(attachmentName + "_v" + version, fis, attachmentSize != -1 ? attachmentSize : contentFile.length(), attachmentParameters);
+            }
         } catch (Exception e) {
             logger.warn("Failed to read attachment [{}] for the page [{}]. Cause: [{}].", attachmentId,
                 createPageIdentifier(pageId, spaceKey), ExceptionUtils.getRootCauseMessage(e));

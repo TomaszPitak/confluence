@@ -269,6 +269,8 @@ public class ConfluenceXMLPackage implements AutoCloseable
      */
     public static final String KEY_ATTACHMENT_CREATION_AUTHOR = "creatorName";
 
+    public static final String KEY_ATTACHMENT_CREATION_AUTHOR_KEY = "creator";
+
     /**
      * The property key to access the attachment creation date.
      */
@@ -278,6 +280,8 @@ public class ConfluenceXMLPackage implements AutoCloseable
      * The property key to access the attachment revision author.
      */
     public static final String KEY_ATTACHMENT_REVISION_AUTHOR = "lastModifierName";
+
+    public static final String KEY_ATTACHMENT_REVISION_AUTHOR_KEY = "lastModifier";
 
     /**
      * The property key to access the attachment revision date.
@@ -295,6 +299,8 @@ public class ConfluenceXMLPackage implements AutoCloseable
      * @see #KEY_ATTACHMENT_VERSION
      */
     public static final String KEY_ATTACHMENT_ATTACHMENTVERSION = "attachmentVersion";
+
+    public static final String KEY_ATTACHMENT_HISTORICALVERSIONS = "historicalVersions";
 
     /**
      * The property key to access the attachment version.
